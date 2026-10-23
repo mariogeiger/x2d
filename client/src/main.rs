@@ -7,6 +7,7 @@ mod format;
 mod link;
 mod panels;
 mod state;
+mod telegram;
 mod video;
 
 fn main() {

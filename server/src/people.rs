@@ -135,6 +135,28 @@ impl People {
         })
     }
 
+    /// Sign `name` in as `role` on one more browser, adding them to the
+    /// book if they are new; return the login token.
+    pub fn sign_in(&self, name: &str, role: Role) -> anyhow::Result<String> {
+        let name = name.trim();
+        anyhow::ensure!(!name.is_empty(), "a person needs a name");
+        let login = fresh_token()?;
+        let since = crate::now();
+        self.change(|book| {
+            let person = match book.people.iter().position(|person| person.name == name) {
+                Some(index) => &mut book.people[index],
+                None => {
+                    book.people.push(Person { name: name.to_owned(), role, invitation: None, logins: Vec::new() });
+                    book.people.last_mut().expect("just pushed")
+                }
+            };
+            person.role = role;
+            person.logins.push(Login { digest: digest(&login), since });
+            Ok(())
+        })?;
+        Ok(login)
+    }
+
     /// Who the login `token` signs in, if anyone.
     pub fn signed_in(&self, token: &str) -> anyhow::Result<Option<Signed>> {
         let digest = digest(token);
@@ -263,6 +285,18 @@ mod tests {
         assert_eq!(people.signed_in(&first).unwrap(), None);
         assert_eq!(people.signed_in(&second).unwrap(), None);
         assert!(!people.revoke("Mario").unwrap());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn signing_in_directly_adds_a_login() {
+        let (people, directory) = book();
+        let (invitation, _) = people.invite("Ada", None, 7).unwrap();
+        let first = people.sign_in("Ada", Role::Operator).unwrap();
+        assert_eq!(people.signed_in(&first).unwrap(), Some(Signed { name: "Ada".into(), role: Role::Operator }));
+        assert!(people.invited(&invitation).unwrap().is_some(), "a pending invitation stays");
+        let second = people.sign_in("Grace", Role::Operator).unwrap();
+        assert_eq!(people.signed_in(&second).unwrap().unwrap().name, "Grace");
         std::fs::remove_dir_all(directory).unwrap();
     }
 

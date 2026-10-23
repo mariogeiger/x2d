@@ -22,6 +22,7 @@ mod texts;
 mod thumbnail;
 mod tls;
 mod web;
+mod webapp;
 
 use std::path::PathBuf;
 

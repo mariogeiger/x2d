@@ -2,6 +2,9 @@
 //! invite someone, revoke them, list who is invited, tell the printer's
 //! state, show what its camera sees.
 //!
+//! Its menu button opens the page as a Mini App, which signs the owner in
+//! (see [`crate::webapp`]).
+//!
 //! The bot asks Telegram for the messages it receives (long polling), and
 //! keeps the number of the last one handled in `telegram-offset`, so that a
 //! restart handles each message once. Messages from anyone else are left
@@ -63,9 +66,10 @@ impl Bot {
         let mut offered = false;
         loop {
             if !offered {
-                match self.telegram.offer(COMMANDS).await {
-                    Ok(()) => offered = true,
-                    Err(error) => tracing::warn!("cannot offer the bot's commands: {error:#}"),
+                let page = format!("{}/", self.origin);
+                match tokio::try_join!(self.telegram.offer(COMMANDS), self.telegram.menu("X2D", &page)) {
+                    Ok(_) => offered = true,
+                    Err(error) => tracing::warn!("cannot offer the bot's commands and page: {error:#}"),
                 }
             }
             let updates = match self.telegram.updates(offset).await {

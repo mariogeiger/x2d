@@ -1,6 +1,6 @@
 //! The Telegram Bot API, as far as x2d uses it: messages and pictures to the
-//! chat of the configuration, the messages it receives, and the commands it
-//! offers.
+//! chat of the configuration, the messages it receives, the commands it
+//! offers and the Mini App its menu button opens.
 //!
 //! Requests carry the bot's token in their URL: errors are told without it.
 
@@ -66,6 +66,15 @@ impl Telegram {
             .collect();
         let body = json!({ "commands": commands, "scope": { "type": "chat", "chat_id": self.chat } });
         self.call("setMyCommands", &body).await.map(drop)
+    }
+
+    /// Make the chat's menu button open the Mini App at `url`, named `text`.
+    pub async fn menu(&self, text: &str, url: &str) -> anyhow::Result<()> {
+        let body = json!({
+            "chat_id": self.chat,
+            "menu_button": { "type": "web_app", "text": text, "web_app": { "url": url } },
+        });
+        self.call("setChatMenuButton", &body).await.map(drop)
     }
 
     async fn call(&self, method: &str, body: &Value) -> anyhow::Result<Value> {

@@ -23,7 +23,10 @@ sur <https://x2d.geiger.ink>, sur invitation seulement.
   lien d'invitation, `/revoquer Max` retire l'accès, `/personnes` dit qui
   est invité, `/etat` dit où en est l'imprimante et `/photo` montre ce que
   voit la caméra. Sans rôle, une personne invitée à nouveau garde le sien.
-  Les messages des autres restent sans réponse.
+  Les messages des autres restent sans réponse. Le bouton de menu du chat
+  ouvre la page comme Mini App : le serveur vérifie la signature que
+  Telegram donne aux données de lancement, et connecte ainsi le seul
+  propriétaire du chat, comme opérateur, sans lien.
 - L'accès passe par un lien d'invitation à usage unique. L'accepter pose un
   cookie de connexion `HttpOnly`. Seuls les condensats SHA-256 des jetons sont
   gardés, et `x2d revoke` coupe tous les navigateurs d'une personne.

@@ -2,7 +2,8 @@
 //! what.
 //!
 //! The built page is public, as its source is; everything about the printer
-//! needs the login cookie that an accepted invitation sets. Requests that
+//! needs the login cookie that an accepted invitation sets, or that the
+//! bot's Mini App sets for the bot's owner. Requests that
 //! change something, and the WebSocket, must come from the page's own
 //! origin.
 
@@ -14,13 +15,14 @@ use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, COOKIE, ORIGIN, REFERRER_P
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Redirect, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use serde_json::json;
 use tower_http::services::{ServeDir, ServeFile};
+use x2d_protocol::Role;
 
 use crate::hub::Hub;
 use crate::people::Signed;
-use crate::session;
+use crate::{session, webapp};
 
 /// The cookie a login token travels in.
 const COOKIE_NAME: &str = "x2d_login";
@@ -34,6 +36,7 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/thumbnail/{key}", get(thumbnail))
         .route("/ws", get(socket))
         .route("/invite/{token}", get(invitation).post(accept))
+        .route("/api/telegram", post(telegram))
         .fallback_service(site)
         .with_state(hub)
 }
@@ -143,11 +146,10 @@ async fn accept(State(hub): State<Arc<Hub>>, headers: HeaderMap, Path(token): Pa
     match hub.people.accept(&token) {
         Ok(Some((login, signed))) => {
             tracing::info!("{} accepted an invitation", signed.name);
-            let cookie = format!("{COOKIE_NAME}={login}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=31536000");
-            match HeaderValue::from_str(&cookie) {
-                Ok(cookie) => ([(SET_COOKIE, cookie)], Redirect::to("/")).into_response(),
-                Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-            }
+            login_cookie(&login).map_or_else(
+                || StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+                |cookie| ([(SET_COOKIE, cookie)], Redirect::to("/")).into_response(),
+            )
         }
         Ok(None) => page(
             "<h1>Lien expiré</h1><p>Cette invitation a déjà servi ou a expiré. Demande un nouveau lien à Mario.</p>",
@@ -157,6 +159,38 @@ async fn accept(State(hub): State<Arc<Hub>>, headers: HeaderMap, Path(token): Pa
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
+}
+
+/// Sign in the owner of the bot's chat, who opened the page as the bot's
+/// Mini App: `init_data` is what Telegram signed for it.
+async fn telegram(State(hub): State<Arc<Hub>>, headers: HeaderMap, init_data: String) -> Response {
+    if !same_origin(&headers, &hub) {
+        return (StatusCode::FORBIDDEN, "Cette demande vient d'un autre site.").into_response();
+    }
+    let Some(bot) = &hub.config.telegram else { return StatusCode::NOT_FOUND.into_response() };
+    let Some(user) = webapp::verify(&init_data, &bot.token, crate::now()).filter(|user| user.id == bot.chat) else {
+        return (StatusCode::FORBIDDEN, "Seul le propriétaire du bot entre ainsi.").into_response();
+    };
+    let name = if user.first_name.trim().is_empty() { "Propriétaire" } else { user.first_name.trim() };
+    match hub.people.sign_in(name, Role::Operator) {
+        Ok(login) => {
+            tracing::info!("{name} signed in from the bot's Mini App");
+            login_cookie(&login).map_or_else(
+                || StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+                |cookie| ([(SET_COOKIE, cookie)], StatusCode::NO_CONTENT).into_response(),
+            )
+        }
+        Err(error) => {
+            tracing::error!("cannot sign the owner in: {error:#}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+/// The header value that keeps `login` as this browser's login.
+fn login_cookie(login: &str) -> Option<HeaderValue> {
+    HeaderValue::from_str(&format!("{COOKIE_NAME}={login}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=31536000"))
+        .ok()
 }
 
 /// A small page of the server's own, around `body`.

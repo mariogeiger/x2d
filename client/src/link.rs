@@ -1,5 +1,6 @@
 //! The page's link to the server: who reads, the history, and the
 //! WebSocket that brings the printer and its video and takes commands.
+//! Opened as the bot's Mini App, the page first signs its reader in.
 //!
 //! The socket reopens by itself, waiting from 1 s to 30 s between tries,
 //! after checking the reader is still signed in. Each time it opens it asks
@@ -15,7 +16,7 @@ use x2d_protocol::{ClientMessage, Command, Outcome, Sample, ServerMessage};
 
 use crate::format::capitalized;
 use crate::state::{Access, Connection, Notice, Page, Reader, VideoStatus};
-use crate::video;
+use crate::{telegram, video};
 
 /// How long an outcome stays on screen.
 const NOTICE_TIME: Duration = Duration::from_secs(6);
@@ -42,6 +43,7 @@ fn with<R>(f: impl FnOnce(&mut Link) -> R) -> R {
 /// Asks the server who reads, and opens the link if they may.
 pub fn start(page: Page) {
     leptos::task::spawn_local(async move {
+        telegram::sign_in().await;
         let access = ask_access().await;
         let granted = matches!(access, Access::Granted(_));
         page.access.set(access);
