@@ -1,6 +1,7 @@
 //! `x2d`: the server of a Bambu Lab printer's live page, and the commands
 //! that run it and invite its people.
 
+mod bot;
 mod camera;
 mod check;
 mod commands;
@@ -10,6 +11,7 @@ mod h264;
 mod history;
 mod hub;
 mod mqtt;
+mod notify;
 mod people;
 mod report;
 mod rtsp;

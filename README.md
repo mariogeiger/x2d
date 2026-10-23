@@ -18,7 +18,10 @@ sur <https://x2d.geiger.ink>, sur invitation seulement.
 - L'aperçu du plateau vient du `.3mf` sur la carte SD, lu par FTPS (port 990).
   Les textes des alertes HMS viennent du service de Bambu Lab, en français.
 - Un bot Telegram signale la fin d'une impression, son échec et chaque
-  nouvelle alerte.
+  nouvelle alerte. Il obéit aussi aux commandes du seul chat de la
+  configuration : `/invite Max` (ou `/invite Max operateur`) répond par un
+  lien d'invitation, `/revoquer Max` retire l'accès, `/personnes` dit qui
+  est invité. Les messages des autres restent sans réponse.
 - L'accès passe par un lien d'invitation à usage unique. L'accepter pose un
   cookie de connexion `HttpOnly`. Seuls les condensats SHA-256 des jetons sont
   gardés, et `x2d revoke` coupe tous les navigateurs d'une personne.

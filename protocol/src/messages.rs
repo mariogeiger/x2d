@@ -31,6 +31,15 @@ impl Role {
             Self::Spectator => "spectateur",
         }
     }
+
+    /// The role as a phrase that says what someone comes as.
+    #[must_use]
+    pub fn as_whom(self) -> &'static str {
+        match self {
+            Self::Operator => "en tant qu'opérateur",
+            Self::Spectator => "en tant que spectateur",
+        }
+    }
 }
 
 /// What the server tells a page.

@@ -117,11 +117,11 @@ async fn socket(
 async fn invitation(State(hub): State<Arc<Hub>>, Path(token): Path<String>) -> Response {
     let body = match hub.people.invited(&token) {
         Ok(Some(signed)) => format!(
-            "<h1>Bonjour {}</h1><p>Cette invitation t'ouvre l'imprimante X2D en direct, en tant que {}.</p>\
+            "<h1>Bonjour {}</h1><p>Cette invitation t'ouvre l'imprimante X2D en direct, {}.</p>\
              <form method=\"post\"><button>Entrer</button></form>\
              <p class=\"small\">Ce lien ne sert qu'une fois : il ouvre la page dans ce navigateur.</p>",
             escape(&signed.name),
-            signed.role.label()
+            signed.role.as_whom()
         ),
         Ok(None) => {
             "<h1>Lien expiré</h1><p>Cette invitation a déjà servi ou a expiré. Demande un nouveau lien à Mario.</p>"

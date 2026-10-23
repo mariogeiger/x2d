@@ -1,6 +1,7 @@
 //! The running server's parts, and the tasks that tie them: the printer's
 //! reports made into the [`Printer`] pages see, the history sampled from it,
-//! the plate's picture fetched for it, and the notifications sent of it.
+//! the plate's picture fetched for it, the notifications sent of it, and the
+//! bot that invites.
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
@@ -15,9 +16,10 @@ use crate::history::{self, History};
 use crate::mqtt::{Link, Reports};
 use crate::people::People;
 use crate::report;
-use crate::telegram::{self, Telegram};
+use crate::telegram::Telegram;
 use crate::texts::Texts;
 use crate::thumbnail::Thumbnails;
+use crate::{bot, notify};
 
 /// Everything the web server reaches.
 pub struct Hub {
@@ -54,19 +56,17 @@ impl Hub {
         let (sender, printer) = watch::channel(Arc::new(Printer::default()));
         tokio::spawn(view(link.reports(), Arc::clone(&texts), Arc::clone(&thumbnails), sender));
         tokio::spawn(Arc::clone(&thumbnails).follow(printer.clone()));
+        let people = People::new(&config.data);
         if let Some(telegram) = &config.telegram {
+            let telegram = Arc::new(Telegram::new(telegram));
             let path = config.data.join("notified.json");
-            tokio::spawn(telegram::notify(
-                Telegram::new(telegram),
-                printer.clone(),
-                camera.clone(),
-                path,
-                config.origin.clone(),
-            ));
+            let origin = config.origin.clone();
+            tokio::spawn(notify::notify(Arc::clone(&telegram), printer.clone(), camera.clone(), path, origin.clone()));
+            tokio::spawn(bot::obey(telegram, people.clone(), origin, config.data.clone()));
         }
         let hub = Arc::new(Self {
             history: Mutex::new(History::open(&config.data)?),
-            people: People::new(&config.data),
+            people,
             log: Log::new(&config.data),
             samples: broadcast::channel(16).0,
             config,
