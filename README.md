@@ -1,0 +1,55 @@
+# x2d
+
+La page en direct d'une imprimante Bambu Lab sur le réseau local : sa caméra,
+son état, ses températures sur 24 h, son AMS et ses alertes, avec la lumière,
+la pause, la reprise et l'arrêt pour les opérateurs. Elle tourne pour une X2D
+sur <https://x2d.geiger.ink>, sur invitation seulement.
+
+## Comment ça marche
+
+- `x2d serve` tient une seule connexion MQTT (TLS, port 8883) à l'imprimante.
+  Il fusionne ses rapports `push_status` en un état, qu'il traduit en un
+  `Printer` lisible.
+- La caméra ne s'ouvre (RTSPS, port 322) que si quelqu'un regarde. Le serveur
+  dépaquette le H.264 en images et les relaie sans les réencoder à toutes les
+  pages ouvertes, par WebSocket. Chaque page les décode avec WebCodecs.
+- Le TLS est vérifié : la chaîne doit remonter aux autorités de Bambu Lab
+  (`server/certs/bambu.pem`), et le nom commun doit être le numéro de série.
+- L'aperçu du plateau vient du `.3mf` sur la carte SD, lu par FTPS (port 990).
+  Les textes des alertes HMS viennent du service de Bambu Lab, en français.
+- Un bot Telegram signale la fin d'une impression, son échec et chaque
+  nouvelle alerte.
+- L'accès passe par un lien d'invitation à usage unique. L'accepter pose un
+  cookie de connexion `HttpOnly`. Seuls les condensats SHA-256 des jetons sont
+  gardés, et `x2d revoke` coupe tous les navigateurs d'une personne.
+- Les rôles sont _opérateur_ et _spectateur_. Le serveur vérifie le rôle et
+  l'état de l'imprimante avant chaque commande, et note chaque commande dans
+  `commands.jsonl`.
+
+## Le code
+
+- `protocol/` : ce que le serveur et la page se disent (état, historique,
+  commandes, vidéo).
+- `server/` : le binaire `x2d`.
+- `client/` : la page Leptos en wasm, construite par `trunk`.
+
+```
+cargo test                                   # protocole et serveur
+x2d --config x2d.toml check --pictures /tmp  # joindre l'imprimante une fois
+x2d --config x2d.toml invite Max             # un lien pour un spectateur
+x2d --config x2d.toml invite Mario --role operateur
+x2d --config x2d.toml people                 # qui est invité
+x2d --config x2d.toml revoke Max
+./deploy.sh                                  # publier sur x2d.geiger.ink
+```
+
+La configuration (TOML, hors du dépôt, lisible par son seul propriétaire)
+donne l'adresse d'écoute et l'origine publique. Elle donne aussi le dossier
+des données, celui de la page construite, et l'imprimante (`host`, `serial`,
+`access_code`). Le bot `[telegram]` (`token`, `chat`) est facultatif.
+L'imprimante doit avoir le mode développeur pour accepter les commandes, et
+la vue en direct LAN pour la caméra.
+
+En production, l'unité systemd utilisateur `geiger-x2d` lance
+`x2d --config ~/server/secrets/x2d.toml serve` sur `127.0.0.1:4011`, derrière
+Caddy. `ffmpeg` décode les photos jointes aux notifications.

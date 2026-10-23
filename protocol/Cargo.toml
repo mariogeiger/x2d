@@ -1,0 +1,13 @@
+[package]
+name = "x2d-protocol"
+description = "What the x2d server and its page say to each other: the printer as seen, its history, commands and video."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
