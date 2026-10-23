@@ -1,5 +1,6 @@
 //! The bot's commands, which only the chat of the configuration may give:
-//! invite someone, revoke them, list who is invited.
+//! invite someone, revoke them, list who is invited, tell the printer's
+//! state, show what its camera sees.
 //!
 //! The bot asks Telegram for the messages it receives (long polling), and
 //! keeps the number of the last one handled in `telegram-offset`, so that a
@@ -11,9 +12,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::Value;
-use x2d_protocol::Role;
+use tokio::sync::watch;
+use x2d_protocol::{Printer, Role};
 
+use crate::camera::Camera;
 use crate::people::People;
+use crate::summary;
 use crate::telegram::Telegram;
 
 /// The commands offered, as the chat's menu shows them.
@@ -21,43 +25,84 @@ const COMMANDS: &[(&str, &str)] = &[
     ("invite", "Inviter : /invite Max, ou /invite Max operateur"),
     ("revoquer", "Retirer l'accès : /revoquer Max"),
     ("personnes", "Les personnes invitées"),
+    ("etat", "Où en est l'imprimante"),
+    ("photo", "Ce que voit la caméra"),
     ("aide", "Ce que je sais faire"),
 ];
 
 /// How many days an invitation sent from the bot can be accepted for.
 const INVITATION_DAYS: u32 = 7;
 
-/// Answer the chat's commands, for as long as the server runs.
-pub async fn obey(telegram: Arc<Telegram>, people: People, origin: String, data: PathBuf) {
-    let offset_path = data.join("telegram-offset");
-    let mut offset: i64 =
-        std::fs::read_to_string(&offset_path).ok().and_then(|text| text.trim().parse().ok()).unwrap_or(0);
-    let mut offered = false;
-    loop {
-        if !offered {
-            match telegram.offer(COMMANDS).await {
-                Ok(()) => offered = true,
-                Err(error) => tracing::warn!("cannot offer the bot's commands: {error:#}"),
-            }
-        }
-        let updates = match telegram.updates(offset).await {
-            Ok(updates) => updates,
-            Err(error) => {
-                tracing::warn!("cannot hear the bot's messages: {error:#}");
-                tokio::time::sleep(Duration::from_secs(10)).await;
-                continue;
-            }
-        };
-        for update in updates {
-            let Some(id) = update.get("update_id").and_then(Value::as_i64) else { continue };
-            offset = offset.max(id + 1);
-            if let Some(text) = from_owner(&update, telegram.chat()) {
-                let reply = answer(text, &people, &origin);
-                if let Err(error) = telegram.text(&reply).await {
-                    tracing::warn!("cannot answer the bot's owner: {error:#}");
+/// The bot, and what its commands reach.
+pub struct Bot {
+    /// The bot itself.
+    pub telegram: Arc<Telegram>,
+    /// The people it invites.
+    pub people: People,
+    /// The origin of the page, which links start with.
+    pub origin: String,
+    /// The printer it tells of.
+    pub printer: watch::Receiver<Arc<Printer>>,
+    /// The camera it shows.
+    pub camera: Camera,
+}
+
+/// What the bot answers.
+enum Reply {
+    Text(String),
+    Photo { jpeg: Vec<u8>, caption: String },
+}
+
+impl Bot {
+    /// Answer the chat's commands, for as long as the server runs, keeping
+    /// the offset of the messages handled in `data`.
+    pub async fn obey(self, data: PathBuf) {
+        let offset_path = data.join("telegram-offset");
+        let mut offset: i64 =
+            std::fs::read_to_string(&offset_path).ok().and_then(|text| text.trim().parse().ok()).unwrap_or(0);
+        let mut offered = false;
+        loop {
+            if !offered {
+                match self.telegram.offer(COMMANDS).await {
+                    Ok(()) => offered = true,
+                    Err(error) => tracing::warn!("cannot offer the bot's commands: {error:#}"),
                 }
             }
-            keep(&offset_path, offset);
+            let updates = match self.telegram.updates(offset).await {
+                Ok(updates) => updates,
+                Err(error) => {
+                    tracing::warn!("cannot hear the bot's messages: {error:#}");
+                    tokio::time::sleep(Duration::from_secs(10)).await;
+                    continue;
+                }
+            };
+            for update in updates {
+                let Some(id) = update.get("update_id").and_then(Value::as_i64) else { continue };
+                offset = offset.max(id + 1);
+                keep(&offset_path, offset);
+                if let Some(text) = from_owner(&update, self.telegram.chat()) {
+                    let sent = match self.reply(text).await {
+                        Reply::Text(text) => self.telegram.text(&text).await,
+                        Reply::Photo { jpeg, caption } => self.telegram.photo(jpeg, &caption).await,
+                    };
+                    if let Err(error) = sent {
+                        tracing::warn!("cannot answer the bot's owner: {error:#}");
+                    }
+                }
+            }
+        }
+    }
+
+    async fn reply(&self, text: &str) -> Reply {
+        let printer = Arc::clone(&self.printer.borrow());
+        match asked(text) {
+            Asked::State => Reply::Text(summary::summary(&printer, crate::now(), &self.origin)),
+            Asked::Photo => match tokio::time::timeout(Duration::from_secs(30), self.camera.picture()).await {
+                Ok(Ok(jpeg)) => Reply::Photo { jpeg, caption: summary::headline(&printer, crate::now()) },
+                Ok(Err(error)) => Reply::Text(format!("La caméra ne répond pas : {error:#}")),
+                Err(_) => Reply::Text("La caméra n'a rien envoyé à temps.".to_owned()),
+            },
+            asked => Reply::Text(answer(asked, &self.people, &self.origin)),
         }
     }
 }
@@ -80,17 +125,40 @@ fn from_owner(update: &Value, owner: i64) -> Option<&str> {
     message.get("text").and_then(Value::as_str)
 }
 
-/// The reply to the owner's message `text`.
-fn answer(text: &str, people: &People, origin: &str) -> String {
+/// What the owner asks.
+#[derive(Debug, PartialEq, Eq)]
+enum Asked<'a> {
+    Invite(&'a str),
+    Revoke(&'a str),
+    People,
+    State,
+    Photo,
+    Help,
+}
+
+/// What the owner's message `text` asks.
+fn asked(text: &str) -> Asked<'_> {
     let text = text.trim();
     let (command, rest) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
     let command = command.split('@').next().unwrap_or(command).to_lowercase();
     let rest = rest.trim();
-    let outcome = match command.as_str() {
-        "/invite" | "/inviter" => invite(rest, people, origin),
-        "/revoquer" | "/révoquer" | "/revoke" => revoke(rest, people),
-        "/personnes" | "/people" => list(people),
-        _ => return help(),
+    match command.as_str() {
+        "/invite" | "/inviter" => Asked::Invite(rest),
+        "/revoquer" | "/révoquer" | "/revoke" => Asked::Revoke(rest),
+        "/personnes" | "/people" => Asked::People,
+        "/etat" | "/état" | "/status" => Asked::State,
+        "/photo" => Asked::Photo,
+        _ => Asked::Help,
+    }
+}
+
+/// The reply to what the owner asked of the people, or the help.
+fn answer(asked: Asked<'_>, people: &People, origin: &str) -> String {
+    let outcome = match asked {
+        Asked::Invite(rest) => invite(rest, people, origin),
+        Asked::Revoke(name) => revoke(name, people),
+        Asked::People => list(people),
+        Asked::State | Asked::Photo | Asked::Help => return help(),
     };
     outcome.unwrap_or_else(|error| {
         tracing::warn!("a command of the bot failed: {error:#}");
@@ -102,19 +170,22 @@ fn help() -> String {
     "Je peux :\n\
      /invite Max : un lien à usage unique pour que Max regarde l'imprimante ;\n\
      /invite Max operateur : pareil, avec les commandes ;\n\
+     sans rôle, une personne déjà invitée garde le sien ;\n\
      /revoquer Max : retirer l'accès de Max, sur tous ses navigateurs ;\n\
-     /personnes : qui est invité.\n\
+     /personnes : qui est invité ;\n\
+     /etat : où en est l'imprimante ;\n\
+     /photo : ce que voit la caméra.\n\
      Je préviens aussi ici de la fin des impressions, de leurs échecs et des alertes."
         .to_owned()
 }
 
 fn invite(rest: &str, people: &People, origin: &str) -> anyhow::Result<String> {
     let named = rest.rsplit_once(char::is_whitespace).and_then(|(name, last)| Some((name.trim(), role_named(last)?)));
-    let (name, role) = named.unwrap_or((rest, Role::Spectator));
+    let (name, role) = named.map_or((rest, None), |(name, role)| (name, Some(role)));
     if name.is_empty() || role_named(name).is_some() {
         return Ok("Dis-moi qui inviter : /invite Max, ou /invite Max operateur.".to_owned());
     }
-    let token = people.invite(name, role, INVITATION_DAYS)?;
+    let (token, role) = people.invite(name, role, INVITATION_DAYS)?;
     Ok(format!(
         "Voici le lien de {name}, {}, valable {INVITATION_DAYS} jours et à usage unique :\n{origin}/invite/{token}",
         role.as_whom()
@@ -201,20 +272,36 @@ mod tests {
     #[test]
     fn invitations_revocations_and_the_list() {
         let (people, directory) = book();
-        let reply = answer("/invite Jean Dupont operateur", &people, "https://x2d");
+        let reply = answer(asked("/invite Jean Dupont operateur"), &people, "https://x2d");
         assert!(reply.starts_with("Voici le lien de Jean Dupont, en tant qu'opérateur"), "{reply}");
         let link = reply.lines().last().unwrap();
         let token = link.strip_prefix("https://x2d/invite/").unwrap();
         assert_eq!(people.invited(token).unwrap().unwrap().role, Role::Operator);
-        assert!(answer("/invite@ai_agent230_bot Max", &people, "https://x2d").contains("Max, en tant que spectateur"));
-        assert!(answer("/invite", &people, "https://x2d").starts_with("Dis-moi qui inviter"));
-        assert!(answer("/invite operateur", &people, "https://x2d").starts_with("Dis-moi qui inviter"));
-        let list = answer("/personnes", &people, "");
+        assert!(
+            answer(asked("/invite@ai_agent230_bot Max"), &people, "https://x2d")
+                .contains("Max, en tant que spectateur")
+        );
+        assert!(
+            answer(asked("/invite Jean Dupont"), &people, "").contains("Jean Dupont, en tant qu'opérateur"),
+            "keeps the role"
+        );
+        assert!(answer(asked("/invite"), &people, "https://x2d").starts_with("Dis-moi qui inviter"));
+        assert!(answer(asked("/invite operateur"), &people, "https://x2d").starts_with("Dis-moi qui inviter"));
+        let list = answer(asked("/personnes"), &people, "");
         assert!(list.contains("• Jean Dupont (opérateur) : aucun navigateur, lien valable encore 7 j"), "{list}");
-        assert_eq!(answer("/revoquer Max", &people, ""), "Max n'a plus accès, sur aucun navigateur.");
-        assert!(answer("/revoquer Max", &people, "").starts_with("Je ne connais personne"));
-        assert!(answer("bonjour", &people, "").starts_with("Je peux"));
+        assert_eq!(answer(asked("/revoquer Max"), &people, ""), "Max n'a plus accès, sur aucun navigateur.");
+        assert!(answer(asked("/revoquer Max"), &people, "").starts_with("Je ne connais personne"));
+        assert!(answer(asked("bonjour"), &people, "").starts_with("Je peux"));
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn commands_read_with_or_without_the_bot_s_name() {
+        assert_eq!(asked("/etat"), Asked::State);
+        assert_eq!(asked("/état@ai_agent230_bot"), Asked::State);
+        assert_eq!(asked("/photo"), Asked::Photo);
+        assert_eq!(asked("/invite  Jean Dupont "), Asked::Invite("Jean Dupont"));
+        assert_eq!(asked("merci"), Asked::Help);
     }
 
     #[test]

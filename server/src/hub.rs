@@ -62,7 +62,9 @@ impl Hub {
             let path = config.data.join("notified.json");
             let origin = config.origin.clone();
             tokio::spawn(notify::notify(Arc::clone(&telegram), printer.clone(), camera.clone(), path, origin.clone()));
-            tokio::spawn(bot::obey(telegram, people.clone(), origin, config.data.clone()));
+            let bot =
+                bot::Bot { telegram, people: people.clone(), origin, printer: printer.clone(), camera: camera.clone() };
+            tokio::spawn(bot.obey(config.data.clone()));
         }
         let hub = Arc::new(Self {
             history: Mutex::new(History::open(&config.data)?),

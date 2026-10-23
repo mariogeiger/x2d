@@ -21,7 +21,9 @@ sur <https://x2d.geiger.ink>, sur invitation seulement.
   nouvelle alerte. Il obéit aussi aux commandes du seul chat de la
   configuration : `/invite Max` (ou `/invite Max operateur`) répond par un
   lien d'invitation, `/revoquer Max` retire l'accès, `/personnes` dit qui
-  est invité. Les messages des autres restent sans réponse.
+  est invité, `/etat` dit où en est l'imprimante et `/photo` montre ce que
+  voit la caméra. Sans rôle, une personne invitée à nouveau garde le sien.
+  Les messages des autres restent sans réponse.
 - L'accès passe par un lien d'invitation à usage unique. L'accepter pose un
   cookie de connexion `HttpOnly`. Seuls les condensats SHA-256 des jetons sont
   gardés, et `x2d revoke` coupe tous les navigateurs d'une personne.

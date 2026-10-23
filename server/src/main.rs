@@ -16,6 +16,7 @@ mod people;
 mod report;
 mod rtsp;
 mod session;
+mod summary;
 mod telegram;
 mod texts;
 mod thumbnail;
@@ -56,9 +57,10 @@ enum Command {
     Invite {
         /// Their name, as the page greets them.
         name: String,
-        /// What they may do.
-        #[arg(long, value_enum, default_value = "spectateur")]
-        role: Kind,
+        /// What they may do: if not given, what they could before, or
+        /// spectateur for someone new.
+        #[arg(long, value_enum)]
+        role: Option<Kind>,
         /// How many days the link can be accepted for.
         #[arg(long, default_value_t = 7)]
         days: u32,
@@ -98,12 +100,12 @@ async fn main() -> anyhow::Result<()> {
         Command::Serve => serve(config).await,
         Command::Check { pictures } => check::run(&config, pictures.as_deref()).await,
         Command::Invite { name, role, days } => {
-            let role = match role {
+            let role = role.map(|role| match role {
                 Kind::Operateur => Role::Operator,
                 Kind::Spectateur => Role::Spectator,
-            };
+            });
             std::fs::create_dir_all(&config.data)?;
-            let token = people.invite(&name, role, days)?;
+            let (token, _) = people.invite(&name, role, days)?;
             println!("{}/invite/{token}", config.origin);
             Ok(())
         }

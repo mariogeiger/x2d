@@ -79,25 +79,31 @@ impl People {
         Self { path: data.join("people.json"), lock: data.join("people.lock") }
     }
 
-    /// Invite `name` as `role` for `days` days, replacing any invitation
-    /// they had and keeping their logins; return the invitation token.
-    pub fn invite(&self, name: &str, role: Role, days: u32) -> anyhow::Result<String> {
+    /// Invite `name` for `days` days, replacing any invitation they had and
+    /// keeping their logins. They come as `role` if given, else as they did
+    /// before, or as a spectator if they are new. Return the invitation token
+    /// and the role it signs in with.
+    pub fn invite(&self, name: &str, role: Option<Role>, days: u32) -> anyhow::Result<(String, Role)> {
         let name = name.trim();
         anyhow::ensure!(!name.is_empty(), "a person needs a name");
         let token = fresh_token()?;
         let until = crate::now() + i64::from(days) * 86_400;
-        self.change(|book| {
+        let role = self.change(|book| {
             let invitation = Some(Invitation { digest: digest(&token), until });
-            match book.people.iter_mut().find(|person| person.name == name) {
+            Ok(match book.people.iter_mut().find(|person| person.name == name) {
                 Some(person) => {
-                    person.role = role;
+                    person.role = role.unwrap_or(person.role);
                     person.invitation = invitation;
+                    person.role
                 }
-                None => book.people.push(Person { name: name.to_owned(), role, invitation, logins: Vec::new() }),
-            }
-            Ok(())
+                None => {
+                    let role = role.unwrap_or(Role::Spectator);
+                    book.people.push(Person { name: name.to_owned(), role, invitation, logins: Vec::new() });
+                    role
+                }
+            })
         })?;
-        Ok(token)
+        Ok((token, role))
     }
 
     /// Who the invitation `token` is for, if it can still be accepted.
@@ -233,7 +239,7 @@ mod tests {
     #[test]
     fn an_invitation_signs_in_once() {
         let (people, directory) = book();
-        let invitation = people.invite("Max", Role::Spectator, 7).unwrap();
+        let invitation = people.invite("Max", None, 7).unwrap().0;
         assert_eq!(people.invited(&invitation).unwrap().unwrap().name, "Max");
         let (login, signed) = people.accept(&invitation).unwrap().unwrap();
         assert_eq!(signed, Signed { name: "Max".into(), role: Role::Spectator });
@@ -248,8 +254,10 @@ mod tests {
     #[test]
     fn revoking_signs_out_everywhere() {
         let (people, directory) = book();
-        let (first, _) = people.accept(&people.invite("Mario", Role::Operator, 7).unwrap()).unwrap().unwrap();
-        let (second, _) = people.accept(&people.invite("Mario", Role::Operator, 7).unwrap()).unwrap().unwrap();
+        let (first, _) = people.accept(&people.invite("Mario", Some(Role::Operator), 7).unwrap().0).unwrap().unwrap();
+        let (token, role) = people.invite("Mario", None, 7).unwrap();
+        assert_eq!(role, Role::Operator, "a person invited again without a role keeps theirs");
+        let (second, _) = people.accept(&token).unwrap().unwrap();
         assert_eq!(people.list().unwrap()[0].logins, 2, "a new invitation keeps the logins");
         assert!(people.revoke("Mario").unwrap());
         assert_eq!(people.signed_in(&first).unwrap(), None);
@@ -261,7 +269,7 @@ mod tests {
     #[test]
     fn an_expired_invitation_is_refused() {
         let (people, directory) = book();
-        let invitation = people.invite("Late", Role::Spectator, 0).unwrap();
+        let invitation = people.invite("Late", None, 0).unwrap().0;
         assert!(people.invited(&invitation).unwrap().is_none());
         assert!(people.accept(&invitation).unwrap().is_none());
         std::fs::remove_dir_all(directory).unwrap();
