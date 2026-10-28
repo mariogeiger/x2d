@@ -12,7 +12,8 @@ use serde::Deserialize;
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
-    /// The address the web server listens on.
+    /// The address the web server listens on, unless systemd passes it a
+    /// socket.
     pub listen: SocketAddr,
     /// The origin the page is served from, such as `https://x2d.geiger.ink`:
     /// invitation links start with it, and requests from any other are

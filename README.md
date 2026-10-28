@@ -52,7 +52,8 @@ x2d --config x2d.toml revoke Max
 ```
 
 La configuration (TOML, hors du dépôt, lisible par son seul propriétaire)
-donne l'adresse d'écoute et l'origine publique. Elle donne aussi le dossier
+donne l'adresse d'écoute et l'origine publique. Si systemd lui passe une
+socket (activation par socket), le serveur l'écoute à la place de l'adresse. Elle donne aussi le dossier
 des données, celui de la page construite, et l'imprimante (`host`, `serial`,
 `access_code`). Le bot `[telegram]` (`token`, `chat`) est facultatif.
 L'imprimante doit avoir le mode développeur pour accepter les commandes, et
