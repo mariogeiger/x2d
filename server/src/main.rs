@@ -24,7 +24,7 @@ mod tls;
 mod web;
 mod webapp;
 
-use std::os::fd::FromRawFd;
+use std::os::fd::{FromRawFd, OwnedFd};
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
 
@@ -155,12 +155,17 @@ async fn serve(config: Config) -> anyhow::Result<()> {
 
 /// The one listening socket systemd passes this process, by the protocol of
 /// `sd_listen_fds`: `LISTEN_PID` names it, `LISTEN_FDS` counts the sockets,
-/// which begin at descriptor 3.
+/// which begin at descriptor 3. It comes back as a duplicate that closes on
+/// exec, and descriptor 3 is closed, so no child could inherit the listener.
 fn inherited_listener() -> Option<UnixListener> {
     let ours = std::env::var("LISTEN_PID").ok()?.parse::<u32>().ok()? == std::process::id();
     let one = std::env::var("LISTEN_FDS").ok()? == "1";
+    if !(ours && one) {
+        return None;
+    }
     // SAFETY: by the protocol, descriptor 3 is a listening socket this process owns.
-    (ours && one).then(|| unsafe { UnixListener::from_raw_fd(3) })
+    let passed = unsafe { OwnedFd::from_raw_fd(3) };
+    Some(UnixListener::from(passed.try_clone().expect("the socket can be duplicated")))
 }
 
 /// Resolves when the process is asked to stop: SIGINT, or SIGTERM, which
