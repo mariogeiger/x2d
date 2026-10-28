@@ -48,7 +48,7 @@ x2d --config x2d.toml invite Max             # un lien pour un spectateur
 x2d --config x2d.toml invite Mario --role operateur
 x2d --config x2d.toml people                 # qui est invité
 x2d --config x2d.toml revoke Max
-./deploy.sh                                  # publier sur x2d.geiger.ink
+~/git/geiger-server/deploy x2d             # publier sur x2d.geiger.ink
 ```
 
 La configuration (TOML, hors du dépôt, lisible par son seul propriétaire)
@@ -59,6 +59,9 @@ des données, celui de la page construite, et l'imprimante (`host`, `serial`,
 L'imprimante doit avoir le mode développeur pour accepter les commandes, et
 la vue en direct LAN pour la caméra.
 
-En production, l'unité systemd utilisateur `geiger-x2d` lance
-`x2d --config ~/server/secrets/x2d.toml serve` sur `127.0.0.1:4011`, derrière
-Caddy. `ffmpeg` décode les photos jointes aux notifications.
+En production, x2d tourne dans un conteneur du compte `geiger` (voir
+`~/git/geiger-server`) : il sert la socket que systemd lui passe, derrière
+Caddy, avec la configuration en secret Podman (`/run/secrets/x2d.toml`), ses
+données dans `/data` et la page dans `/site`. `ffmpeg` décode les photos
+jointes aux notifications. Les invitations s'y font avec la même
+configuration : `ssh geiger@localhost podman exec systemd-x2d x2d invite Max`.
